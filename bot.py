@@ -8,6 +8,7 @@ import time
 import random
 import pandas as pd
 import altair as alt
+import os
 
 # Set page configuration
 st.set_page_config(
@@ -230,13 +231,20 @@ button:active {
 # Configure Groq API
 # =============================
 try:
-    GROQ_API_KEY = st.secrets["GROQ_API_KEY"]
-except:
+    GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", "")
+except Exception:
     GROQ_API_KEY = ""
-    st.warning("Using empty Groq key. Please add to secrets!")
+
+# Fallback to environment variable if not in Streamlit secrets
+if not GROQ_API_KEY:
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL = "llama3-8b-8192"
+
+# Proactive warning if key is missing
+if not GROQ_API_KEY:
+    st.error("Groq API key not set. Please add GROQ_API_KEY to Streamlit secrets or environment variables.")
 
 # =============================
 # SESSION STATE INIT
@@ -448,10 +456,25 @@ def generate_follow_up_question(specialty, problem, previous_answers, question_n
         "temperature": 0.7,
         "max_tokens": 30
     }
+    # Guard: missing API key
+    if not GROQ_API_KEY:
+        st.error("Groq API key is missing; cannot generate follow-up question.")
+        return f"Can you tell me more about your {problem.lower()}?"
+
     try:
-        r = requests.post(GROQ_URL, headers=headers, json=payload)
-        r.raise_for_status()
+        r = requests.post(GROQ_URL, headers=headers, json=payload, timeout=30)
+        if r.status_code != 200:
+            # Show detailed server response to help diagnose 400 errors
+            try:
+                err_detail = r.json()
+            except Exception:
+                err_detail = r.text
+            st.error(f"Error generating question: HTTP {r.status_code} - {err_detail}")
+            return f"Can you tell me more about your {problem.lower()}?"
         return r.json()['choices'][0]['message']['content'].strip()
+    except requests.Timeout:
+        st.error("Error generating question: Request to Groq timed out.")
+        return f"Can you tell me more about your {problem.lower()}?"
     except Exception as e:
         st.error(f"Error generating question: {str(e)}")
         return f"Can you tell me more about your {problem.lower()}?"
@@ -473,10 +496,24 @@ def get_groq_response(prompt):
         "temperature": 0.7,
         "max_tokens": 4096  # Increased for more detailed responses
     }
+    # Guard: missing API key
+    if not GROQ_API_KEY:
+        st.error("Groq API key is missing; cannot contact Groq API.")
+        return "API Error"
+
     try:
-        r = requests.post(GROQ_URL, headers=headers, json=payload)
-        r.raise_for_status()
+        r = requests.post(GROQ_URL, headers=headers, json=payload, timeout=60)
+        if r.status_code != 200:
+            try:
+                err_detail = r.json()
+            except Exception:
+                err_detail = r.text
+            st.error(f"Groq API Error: HTTP {r.status_code} - {err_detail}")
+            return "API Error"
         return r.json()['choices'][0]['message']['content']
+    except requests.Timeout:
+        st.error("Groq API Error: Request to Groq timed out.")
+        return "API Error"
     except Exception as e:
         st.error(f"Groq API Error: {str(e)}")
         return "API Error"
